@@ -1,0 +1,5 @@
+# Copy to ~/.config/orwatch/config.toml if you want to change defaults.
+
+warn_daily = 2.0
+warn_remaining = 1.0
+cache_secs = 50

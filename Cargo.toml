@@ -1,0 +1,19 @@
+[package]
+name = "orwatch"
+version = "0.1.0"
+edition = "2024"
+description = "OpenRouter spend watcher for the terminal and waybar"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "0.8"
+ureq = { version = "2", features = ["json"] }
+
+[dev-dependencies]
+tempfile = "3"
