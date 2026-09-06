@@ -11,6 +11,21 @@ orwatch json      # raw snapshot
 orwatch --fresh   # skip cache
 ```
 
+```
+  env  or  ~/.secrets
+           |
+           v
+        orwatch ------ GET /api/v1/key
+           |    \
+           |     `--> ~/.cache/orwatch  (reuse ~50s)
+           |
+           +-- status --> human report  (terminal)
+           +-- waybar --> { text, tooltip, class }  --> waybar
+           +-- json   --> raw snapshot
+```
+
+Waybar only consumes that JSON. Module layout and CSS live in the [dotfiles](https://github.com/Streppel/dotfiles), not here.
+
 ## Key
 
 `OPENROUTER_API_KEY` from the environment, or from `~/.secrets` (same file zsh sources). Waybar does not load `.zshrc`, so the binary reads `~/.secrets` itself.
