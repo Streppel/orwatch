@@ -1,9 +1,11 @@
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 const KEY_URL: &str = "https://openrouter.ai/api/v1/key";
+const CREDITS_URL: &str = "https://openrouter.ai/api/v1/credits";
 const USER_AGENT: &str = concat!("orwatch/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -19,6 +21,40 @@ pub enum ApiError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyResponse {
     pub data: KeyData,
+    /// Account-level credit totals from `/credits`.
+    /// Optional so snapshots cached by older versions still decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<CreditsData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreditsData {
+    pub total_credits: f64,
+    #[serde(default)]
+    pub total_usage: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Balance {
+    pub total: f64,
+    pub remaining: f64,
+    pub pct: f64,
+}
+
+impl KeyResponse {
+    /// Account balance, computed from the credit totals.
+    pub fn balance(&self) -> Option<Balance> {
+        let credits = self.credits.as_ref()?;
+        if credits.total_credits <= 0.0 {
+            return None;
+        }
+        let remaining = (credits.total_credits - credits.total_usage).max(0.0);
+        Some(Balance {
+            total: credits.total_credits,
+            remaining,
+            pct: (remaining / credits.total_credits) * 100.0,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,14 +88,14 @@ impl KeyData {
     }
 }
 
-pub fn fetch_key(api_key: &str) -> Result<KeyResponse, ApiError> {
+fn get_json<T: DeserializeOwned>(url: &str, api_key: &str) -> Result<T, ApiError> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
         .user_agent(USER_AGENT)
         .build();
 
     let response = agent
-        .get(KEY_URL)
+        .get(url)
         .set("Authorization", &format!("Bearer {api_key}"))
         .call()
         .map_err(|err| match err {
@@ -73,6 +109,20 @@ pub fn fetch_key(api_key: &str) -> Result<KeyResponse, ApiError> {
     response
         .into_json()
         .map_err(|err| ApiError::Decode(err.to_string()))
+}
+
+pub fn fetch_key(api_key: &str) -> Result<KeyResponse, ApiError> {
+    get_json(KEY_URL, api_key)
+}
+
+pub fn fetch_credits(api_key: &str) -> Result<CreditsData, ApiError> {
+    let response: CreditsResponse = get_json(CREDITS_URL, api_key)?;
+    Ok(response.data)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CreditsResponse {
+    data: CreditsData,
 }
 
 pub fn load_cache(path: &Path, ttl: Duration) -> Option<KeyResponse> {
@@ -107,9 +157,11 @@ pub fn fetch_or_cache(
         return Ok(hit);
     }
     match fetch_key(api_key) {
-        Ok(fresh) => {
-            save_cache(cache, &fresh);
-            Ok(fresh)
+        Ok(mut snapshot) => {
+            // Balance is a nice-to-have: if /credits fails, keep the usage data.
+            snapshot.credits = fetch_credits(api_key).ok();
+            save_cache(cache, &snapshot);
+            Ok(snapshot)
         }
         Err(err) if allow_stale => {
             let raw = fs::read_to_string(cache).map_err(|_| err.clone())?;
@@ -138,6 +190,10 @@ mod tests {
                 usage_monthly: 0.88,
                 is_free_tier: false,
             },
+            credits: Some(CreditsData {
+                total_credits: 20.0,
+                total_usage: 4.6,
+            }),
         }
     }
 
@@ -148,6 +204,21 @@ mod tests {
     }
 
     #[test]
+    fn balance_from_credits() {
+        let balance = sample().balance().unwrap();
+        assert!((balance.total - 20.0).abs() < f64::EPSILON);
+        assert!((balance.remaining - 15.4).abs() < 0.001);
+        assert!((balance.pct - 77.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn balance_needs_credits() {
+        let mut snap = sample();
+        snap.credits = None;
+        assert!(snap.balance().is_none());
+    }
+
+    #[test]
     fn cache_roundtrip() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("snap.json");
@@ -155,6 +226,18 @@ mod tests {
         save_cache(&path, &snap);
         let loaded = load_cache(&path, Duration::from_secs(60)).unwrap();
         assert_eq!(loaded.data.usage_daily, 0.18);
+        assert!(loaded.balance().is_some());
+    }
+
+    #[test]
+    fn old_cache_without_credits_still_loads() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("snap.json");
+        let raw = r#"{"data":{"label":"tui","limit":null,"limit_reset":null,"limit_remaining":null,"usage":0.5}}"#;
+        fs::write(&path, raw).unwrap();
+        let loaded = load_cache(&path, Duration::from_secs(60)).unwrap();
+        assert!(loaded.credits.is_none());
+        assert!(loaded.balance().is_none());
     }
 
     #[test]

@@ -69,7 +69,7 @@ fn snapshot(fresh: bool, allow_stale: bool) -> Result<KeyResponse, anyhow::Error
 
 fn run_status(fresh: bool) -> Result<(), anyhow::Error> {
     let snap = snapshot(fresh, false)?;
-    println!("{}", render::human(&snap.data));
+    println!("{}", render::human(&snap));
     Ok(())
 }
 
@@ -81,7 +81,7 @@ fn run_json(fresh: bool) -> Result<(), anyhow::Error> {
 
 fn waybar_payload(fresh: bool) -> render::WaybarOut {
     match snapshot(fresh, true) {
-        Ok(snap) => render::waybar_ok(&snap.data, &Config::load()),
+        Ok(snap) => render::waybar_ok(&snap, &Config::load()),
         Err(err) => {
             let msg = match err.downcast_ref::<KeyError>() {
                 Some(KeyError::Missing) => {

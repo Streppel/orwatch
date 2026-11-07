@@ -1,4 +1,4 @@
-use crate::api::KeyData;
+use crate::api::KeyResponse;
 use crate::config::Config;
 use serde::Serialize;
 
@@ -41,35 +41,69 @@ pub fn usd(amount: f64) -> String {
     }
 }
 
-pub fn classify(data: &KeyData, cfg: &Config) -> StatusClass {
-    if let Some(remaining) = data.limit_remaining
-        && remaining <= cfg.warn_remaining
-    {
+/// Compact percentage for the waybar text (truncated, never rounds up).
+pub fn pct_u32(pct: f64) -> u32 {
+    pct.clamp(0.0, 100.0) as u32
+}
+
+/// One-decimal percentage for tooltips and the full report.
+pub fn format_pct(pct: f64) -> String {
+    if pct >= 99.95 {
+        "100%".into()
+    } else {
+        format!("{pct:.1}%")
+    }
+}
+
+pub fn classify(snapshot: &KeyResponse, cfg: &Config) -> StatusClass {
+    let data = &snapshot.data;
+    let balance = snapshot.balance();
+
+    let low_remaining = data
+        .limit_remaining
+        .is_some_and(|remaining| remaining <= cfg.warn_remaining)
+        || balance.is_some_and(|b| b.remaining <= cfg.warn_remaining);
+    if low_remaining {
         return StatusClass::Critical;
     }
-    if data.usage_daily >= cfg.warn_daily {
+
+    let low_pct = data.remaining_pct().is_some_and(|percent| percent <= 25.0)
+        || balance.is_some_and(|b| b.pct <= 25.0);
+    if low_pct || data.usage_daily >= cfg.warn_daily {
         return StatusClass::Warning;
     }
-    if let Some(pct) = data.remaining_pct()
-        && pct <= 25.0
-    {
-        return StatusClass::Warning;
-    }
+
     StatusClass::Normal
 }
 
-pub fn waybar_ok(data: &KeyData, cfg: &Config) -> WaybarOut {
-    let class = classify(data, cfg);
-    let text_value = match data.limit_remaining {
-        Some(remaining) => usd(remaining),
-        None => usd(data.usage_daily),
+pub fn waybar_ok(snapshot: &KeyResponse, cfg: &Config) -> WaybarOut {
+    let class = classify(snapshot, cfg);
+    let data = &snapshot.data;
+    let balance = snapshot.balance();
+
+    // A key cap is the most specific budget; otherwise fall back to the
+    // account balance. Only without either do we show today's spend.
+    let (text_value, percent) = match data.limit_remaining {
+        Some(remaining) => (usd(remaining), data.remaining_pct()),
+        None => match balance {
+            Some(balance) => (usd(balance.remaining), Some(balance.pct)),
+            None => (usd(data.usage_daily), None),
+        },
+    };
+    let text_value = match percent {
+        Some(percent) => format!(
+            "{text_value} <span foreground='#727169'>{}%</span>",
+            pct_u32(percent)
+        ),
+        None => text_value,
     };
     let text = format!("<span foreground='#727169'>or</span>:{text_value}");
+
     WaybarOut {
         text,
-        tooltip: tooltip(data),
+        tooltip: tooltip(snapshot),
         class: class.as_str().to_string(),
-        percentage: data.remaining_pct().map(|p| p.clamp(0.0, 100.0) as u32),
+        percentage: percent.map(pct_u32),
     }
 }
 
@@ -82,13 +116,22 @@ pub fn waybar_err(message: &str) -> WaybarOut {
     }
 }
 
-pub fn human(data: &KeyData) -> String {
+pub fn human(snapshot: &KeyResponse) -> String {
+    let data = &snapshot.data;
     let mut lines = Vec::new();
     let title = match data.label.as_deref() {
         Some(label) if !label.is_empty() => format!("openrouter  {label}"),
         _ => "openrouter".into(),
     };
     lines.push(title);
+    if let Some(balance) = snapshot.balance() {
+        lines.push(format!(
+            "  balance     {} left of {} ({})",
+            usd(balance.remaining),
+            usd(balance.total),
+            format_pct(balance.pct)
+        ));
+    }
     lines.push(format!("  today       {}", usd(data.usage_daily)));
     lines.push(format!("  week        {}", usd(data.usage_weekly)));
     lines.push(format!("  month       {}", usd(data.usage_monthly)));
@@ -114,17 +157,24 @@ pub fn human(data: &KeyData) -> String {
     lines.join("\n")
 }
 
-fn tooltip(data: &KeyData) -> String {
-    let mut lines = vec![
-        match data.label.as_deref() {
-            Some(label) if !label.is_empty() => format!("OpenRouter · {label}"),
-            _ => "OpenRouter".into(),
-        },
-        format!("Today     {}", usd(data.usage_daily)),
-        format!("Week      {}", usd(data.usage_weekly)),
-        format!("Month     {}", usd(data.usage_monthly)),
-        format!("Lifetime  {}", usd(data.usage)),
-    ];
+fn tooltip(snapshot: &KeyResponse) -> String {
+    let data = &snapshot.data;
+    let mut lines = vec![match data.label.as_deref() {
+        Some(label) if !label.is_empty() => format!("OpenRouter · {label}"),
+        _ => "OpenRouter".into(),
+    }];
+    if let Some(balance) = snapshot.balance() {
+        lines.push(format!(
+            "Balance   {} / {} ({})",
+            usd(balance.remaining),
+            usd(balance.total),
+            format_pct(balance.pct)
+        ));
+    }
+    lines.push(format!("Today     {}", usd(data.usage_daily)));
+    lines.push(format!("Week      {}", usd(data.usage_weekly)));
+    lines.push(format!("Month     {}", usd(data.usage_monthly)));
+    lines.push(format!("Lifetime  {}", usd(data.usage)));
     match (data.limit, data.limit_remaining) {
         (Some(limit), Some(remaining)) => {
             lines.push(format!("Key cap   {} / {}", usd(remaining), usd(limit)));
@@ -138,8 +188,9 @@ fn tooltip(data: &KeyData) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::{CreditsData, KeyData};
 
-    fn data() -> KeyData {
+    fn key() -> KeyData {
         KeyData {
             label: Some("tui".into()),
             limit: Some(5.0),
@@ -154,6 +205,16 @@ mod tests {
         }
     }
 
+    fn snapshot() -> KeyResponse {
+        KeyResponse {
+            data: key(),
+            credits: Some(CreditsData {
+                total_credits: 20.0,
+                total_usage: 10.0,
+            }),
+        }
+    }
+
     #[test]
     fn usd_formats_small_amounts() {
         assert_eq!(usd(0.0), "$0.00");
@@ -162,40 +223,93 @@ mod tests {
     }
 
     #[test]
+    fn pct_formats() {
+        assert_eq!(pct_u32(98.7), 98);
+        assert_eq!(pct_u32(120.0), 100);
+        assert_eq!(format_pct(98.7), "98.7%");
+        assert_eq!(format_pct(100.0), "100%");
+    }
+
+    #[test]
     fn low_remaining_is_critical() {
         let cfg = Config::default();
-        assert_eq!(classify(&data(), &cfg), StatusClass::Critical);
+        assert_eq!(classify(&snapshot(), &cfg), StatusClass::Critical);
     }
 
     #[test]
     fn high_daily_is_warning() {
-        let mut d = data();
-        d.limit_remaining = Some(4.0);
-        d.usage_daily = 2.5;
-        assert_eq!(classify(&d, &Config::default()), StatusClass::Warning);
+        let mut snap = snapshot();
+        snap.data.limit_remaining = Some(4.0);
+        snap.data.usage_daily = 2.5;
+        assert_eq!(classify(&snap, &Config::default()), StatusClass::Warning);
+    }
+
+    #[test]
+    fn low_balance_is_warning() {
+        let mut snap = snapshot();
+        snap.data.limit = None;
+        snap.data.limit_remaining = None;
+        snap.credits = Some(CreditsData {
+            total_credits: 20.0,
+            total_usage: 17.0,
+        });
+        assert_eq!(classify(&snap, &Config::default()), StatusClass::Warning);
+    }
+
+    #[test]
+    fn depleted_balance_is_critical() {
+        let mut snap = snapshot();
+        snap.data.limit = None;
+        snap.data.limit_remaining = None;
+        snap.credits = Some(CreditsData {
+            total_credits: 20.0,
+            total_usage: 19.5,
+        });
+        assert_eq!(classify(&snap, &Config::default()), StatusClass::Critical);
     }
 
     #[test]
     fn waybar_uses_remaining_when_capped() {
-        let out = waybar_ok(&data(), &Config::default());
+        let out = waybar_ok(&snapshot(), &Config::default());
         assert!(out.text.contains("$0.40"), "{}", out.text);
+        assert!(out.text.contains("8%"), "{}", out.text);
         assert_eq!(out.class, "critical");
     }
 
     #[test]
-    fn waybar_uses_daily_without_cap() {
-        let mut d = data();
-        d.limit = None;
-        d.limit_remaining = None;
-        let out = waybar_ok(&d, &Config::default());
-        assert!(out.text.contains("$0.18"), "{}", out.text);
+    fn waybar_shows_balance_without_cap() {
+        let mut snap = snapshot();
+        snap.data.limit = None;
+        snap.data.limit_remaining = None;
+        let out = waybar_ok(&snap, &Config::default());
+        assert!(out.text.contains("$10.00"), "{}", out.text);
+        assert!(out.text.contains("50%"), "{}", out.text);
+        assert_eq!(out.percentage, Some(50));
     }
 
     #[test]
-    fn human_lists_periods() {
-        let text = human(&data());
+    fn waybar_uses_daily_without_credits() {
+        let mut snap = snapshot();
+        snap.data.limit = None;
+        snap.data.limit_remaining = None;
+        snap.credits = None;
+        let out = waybar_ok(&snap, &Config::default());
+        assert!(out.text.contains("$0.18"), "{}", out.text);
+        assert_eq!(out.percentage, None);
+    }
+
+    #[test]
+    fn human_lists_balance_and_periods() {
+        let text = human(&snapshot());
         assert!(text.contains("today"));
+        assert!(text.contains("$10.00 left of $20.00 (50.0%)"), "{text}");
         assert!(text.contains("$0.40 left of $5.00"));
         assert!(text.contains("resets monthly"));
+    }
+
+    #[test]
+    fn tooltip_lists_balance() {
+        let text = tooltip(&snapshot());
+        assert!(text.contains("Balance   $10.00 / $20.00 (50.0%)"), "{text}");
     }
 }

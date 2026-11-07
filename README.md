@@ -2,10 +2,12 @@
 
 OpenRouter spend watcher. Terminal report plus a waybar module.
 
-Reads `GET https://openrouter.ai/api/v1/key` with your normal API key (not a management key).
+Reads `GET /api/v1/credits` and `/api/v1/key` with your OpenRouter API key
+(not a management key). `credits` supplies the account balance; `key` supplies
+the spend periods and any per-key cap.
 
 ```
-orwatch           # today / week / month / key cap
+orwatch           # balance + today / week / month / key cap
 orwatch waybar    # JSON for waybar
 orwatch json      # raw snapshot
 orwatch --fresh   # skip cache
@@ -15,16 +17,21 @@ orwatch --fresh   # skip cache
   env  or  ~/.secrets
            |
            v
-        orwatch ------ GET /api/v1/key
+        orwatch ------ GET /api/v1/credits + /api/v1/key
            |    \
            |     `--> ~/.cache/orwatch  (reuse ~50s)
            |
            +-- status --> human report  (terminal)
-           +-- waybar --> { text, tooltip, class }  --> waybar
+           +-- waybar --> { text, tooltip, class, percentage }  --> waybar
            +-- json   --> raw snapshot
 ```
 
 Waybar only consumes that JSON. Module layout and CSS live in the [dotfiles](https://github.com/Streppel/dotfiles), not here.
+
+The waybar text shows the most specific budget first: remaining key cap when
+the key has one, otherwise the account balance left plus the percentage of
+purchased credits still available, otherwise today's spend. The tooltip always
+lists the full balance and all spend periods.
 
 ## Key
 
