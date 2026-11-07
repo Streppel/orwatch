@@ -26,7 +26,11 @@ orwatch --fresh   # skip cache
            +-- json   --> raw snapshot
 ```
 
-Waybar only consumes that JSON. Module layout and CSS live in the [dotfiles](https://github.com/Streppel/dotfiles), not here.
+Waybar only consumes that JSON. The module definition and CSS are the consumer's
+job; a starting point lives in [`contrib/waybar/`](contrib/waybar) — copy the
+`custom/orwatch` block into your `modules.jsonc` and import the CSS after your
+palette. The active, theme-specific setup lives in the
+[dotfiles](https://github.com/Streppel/dotfiles).
 
 The waybar text shows the most specific budget first: remaining key cap when
 the key has one, otherwise the account balance left plus the percentage of
@@ -44,6 +48,8 @@ git clone https://github.com/Streppel/orwatch.git ~/code/rust/orwatch
 cargo install --path ~/code/rust/orwatch --root ~/.local
 ```
 
-Binary lands at `~/.local/bin/orwatch`. Waybar wiring lives in [Streppel/dotfiles](https://github.com/Streppel/dotfiles) (`custom/orwatch`).
+Binary lands at `~/.local/bin/orwatch`. For Waybar, use the reference module and
+CSS in [`contrib/waybar/`](contrib/waybar); the personal setup lives in
+[Streppel/dotfiles](https://github.com/Streppel/dotfiles) (`custom/orwatch`).
 
 Optional config: `~/.config/orwatch/config.toml` (see `config.example.toml`).

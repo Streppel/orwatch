@@ -1,0 +1,33 @@
+/* orwatch waybar module — reference styling.
+   Import after your palette, or edit the colors below. */
+
+@define-color orwatch_accent #957fb8;
+@define-color orwatch_warning #dca561;
+@define-color orwatch_critical #e82424;
+@define-color orwatch_on_critical #0d0d14;
+@define-color orwatch_muted #727169;
+
+#custom-orwatch {
+	background: transparent;
+	color: @orwatch_accent;
+	border: 1px solid @orwatch_accent;
+	border-radius: 4px;
+	padding: 0 9px;
+	margin: 0 2px;
+}
+
+#custom-orwatch.warning {
+	color: @orwatch_warning;
+	border-color: @orwatch_warning;
+}
+
+#custom-orwatch.critical {
+	background: @orwatch_critical;
+	color: @orwatch_on_critical;
+	border-color: @orwatch_critical;
+}
+
+#custom-orwatch.disconnected {
+	color: @orwatch_muted;
+	border-color: @orwatch_muted;
+}

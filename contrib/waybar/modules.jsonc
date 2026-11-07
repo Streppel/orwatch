@@ -1,0 +1,10 @@
+{
+  // Waybar module for orwatch. Copy this block into your modules.jsonc,
+  // or include this file from your waybar config.
+  "custom/orwatch": {
+    "exec": "~/.local/bin/orwatch waybar",
+    "return-type": "json",
+    "interval": 60,
+    "on-click": "kitty --hold -e ~/.local/bin/orwatch"
+  }
+}
